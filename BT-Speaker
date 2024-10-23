@@ -1,0 +1,76 @@
+import bluetooth
+import wave
+from machine import Pin, I2S, PWM
+
+# I2S-Konfiguration
+i2s = I2S(0,
+          sck=Pin(14),  # Clock-Pin für I2S
+          ws=Pin(13),   # Word Select-Pin für I2S
+          sd=Pin(12),   # Data-Pin für I2S
+          mode=I2S.TX,  # Sendemodus (Transmitter)
+          bits=16,      # 16-Bit-Audio
+          format=I2S.MONO,  # Mono-Audio
+          rate=44100,   # Abtastrate von 44100 Hz
+          ibuf=1024)    # Buffer-Größe
+
+# PWM für die Lautstärkeregelung
+pwm = PWM(Pin(5), freq=5000, duty=512)  # Frequenz und Duty-Cycle für Lautstärke
+
+# Funktion zur Lautstärkeregelung
+def set_volume(level):
+    if 0 <= level <= 1023:
+        pwm.duty(level)
+        print(f"Lautstärke auf {level} eingestellt")
+    else:
+        print("Lautstärkewert außerhalb des Bereichs (0-1023)")
+
+# Funktion zur Verbindung mit Bluetooth-Gerät
+def connect_bluetooth():
+    server_sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+    server_sock.bind(("", bluetooth.PORT_ANY))
+    server_sock.listen(1)
+
+    port = server_sock.getsockname()[1]
+    bluetooth.advertise_service(server_sock, "ESP32_Audio",
+                                 service_id="00001101-0000-1000-8000-00805F9B34FB",
+                                 service_classes=["00001101-0000-1000-8000-00805F9B34FB"],
+                                 profiles=[bluetooth.SERIAL_PORT_PROFILE])
+
+    print(f"Bluetooth läuft auf RFCOMM-Kanal {port}, warte auf Verbindung...")
+    client_sock, client_info = server_sock.accept()
+    print(f"Verbindung akzeptiert von {client_info}")
+    return client_sock
+
+# Funktion zum Abspielen von WAV-Dateien
+def play_wave(filename):
+    with wave.open(filename, 'rb') as wav:
+        while True:
+            data = wav.readframes(1024)
+            if not data:
+                break
+            i2s.write(data)
+
+# Hauptprogramm
+def main():
+    client_sock = connect_bluetooth()
+    print("Bluetooth verbunden. Bereit zur Audioübertragung.")
+
+    try:
+        while True:
+            data = client_sock.recv(1024)  # Daten vom Bluetooth-Gerät empfangen
+            if not data:
+                break
+
+            if data.startswith(b'VOL'):
+                level = int(data[3:])
+                set_volume(level)  # Lautstärke einstellen
+            elif data.endswith(b'.wav'):
+                play_wave(data.decode())  # WAV-Datei abspielen
+
+    except OSError as e:
+        print("Bluetooth-Verbindung getrennt")
+    finally:
+        client_sock.close()
+
+if __name__ == '__main__':
+    main()
